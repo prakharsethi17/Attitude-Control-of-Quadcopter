@@ -45,6 +45,7 @@ float Kp_vel = 0.1;
 float Ki_vel = 0.05;    
 float Kd_vel = 0.15;    
 const double N_vel = 100.0;   // Derivative filter coefficient for inner loop
+int I_limit = 800; // Iterm should not increase more than this value to prevent spoolup and spool-down sideffects.
 
 // Note: Inner loop now uses Ts = 1 for integration and differentiation
 
@@ -291,7 +292,7 @@ void loop() {
       float P_vel = Kp_vel * error;
 
       iTerm_vel += error; // Ts=1
-      float I_vel = Ki_vel * iTerm_vel * 1;
+      float I_vel = constrain((Ki_vel * iTerm_vel * 1), -I_limit, I_limit);
 
       float alpha = (N_vel * 1) / (1.0 + N_vel * 1);
       double dRaw = (error - lastError_vel) / 1; // Ts=1
