@@ -299,12 +299,28 @@ void loop() {
       dFilt_vel = dFilt_vel + alpha * (dRaw - dFilt_vel);
       float D_vel = Kd_vel * dFilt_vel;
 
-      float u = P_vel + I_vel + D_vel;
+      float roll_pid = P_vel + I_vel + D_vel;
+      float pitch_pid = 0;
+      float yaw_pid = 0;
+      /*
+       CW,M3     M1,CCW
+            \   /
+              x
+            /   \
+      CCW,M2     M4,CW
+          
+      M1 = Throttle - roll_pid - pitch_pid - yaw_pid
+      M2 = Throttle + roll_pid + pitch_pid - yaw_pid
+      M3 = Throttle + roll_pid - pitch_pid + yaw_pid
+      M4 = Throttle - roll_pid + pitch_pid + yaw_pid
+      
+      
+      */
 
-      M1 = constrain(baselinePWM - (int)(0.5 * u), 150, 1023); // Right front
-      M4 = constrain(baselinePWM - (int)(0.5 * u), 150, 1023); // Right rear
-      M2 = constrain(baselinePWM + (int)(0.5 * u), 150, 1023); // Left rear
-      M3 = constrain(baselinePWM + (int)(0.5 * u), 150, 1023); // Left front
+      M1 = constrain(baselinePWM - (int)(0.5 * roll_pid), 150, 1023); // Right front
+      M4 = constrain(baselinePWM - (int)(0.5 * roll_pid), 150, 1023); // Right rear
+      M2 = constrain(baselinePWM + (int)(0.5 * roll_pid), 150, 1023); // Left rear
+      M3 = constrain(baselinePWM + (int)(0.5 * roll_pid), 150, 1023); // Left front
 
       setMotor(in1, in2, M1);
       setMotor(in5, in6, M2);
