@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>ESP32 Quad GUI</title>
+  <style>
+    body {
+      font-family: monospace;
+      background-color: #111;
+      color: #0f0;
+      padding: 20px;
+    }
+    #log {
+      white-space: pre-wrap;
+      border: 1px solid #0f0;
+      padding: 10px;
+      max-height: 300px;
+      overflow-y: auto;
+      background: #000;
+    }
+    input[type="text"] {
+      width: 300px;
+    }
+    button {
+      margin: 5px;
+      padding: 5px;
+    }
+  </style>
+</head>
+<body>
+  <h2>ESP32 Quad WebSocket Console</h2>
+
+  <div>
+    <label>ESP IP Address (ws://IP:81): </label>
+    <input type="text" id="ipInput" value="ws://192.168.1.12:81">
+    <button onclick="connectWebSocket()">Connect</button>
+    <span id="status">Not connected</span>
+  </div>
+
+  <div>
+    <button onclick="sendCmd('A')">ARM</button>
+    <button onclick="sendCmd('D')">DISARM</button>
+    <!-- Excitation Buttons: also start local capture -->
+    <button onclick="startExcitation('impulse')">Roll Impulse</button>
+    <button onclick="startExcitation('step')">Roll Step</button>
+    <button onclick="startExcitation('sine')">Roll Sine</button>
+    <button onclick="sendCmd('G:1,0,0,100,100,100,100')">Default PID</button>
+  </div>
+
+  <div>
+    <label>Custom Command:</label>
+    <input type="text" id="customCmd">
+    <button onclick="sendCustom()">Send</button>
+    <button onclick="downloadLogs()">Download Logs</button>
+  </div>
+
+  <h3>Logs:</h3>
+  <div id="log"></div>
+
+  <script>
+    let socket;
+    let logBuffer = "";
+    // Global telemetry variables (latest values)
+    let latestTelemetry = ""; // the raw CSV string from ESP32
+
+    // ----- Excitation Capture Variables -----
+    let excitationCapture = {
+      active: false,
+      mode: "",           // "impulse", "step", or "sine"
+      currentIndex: 0,    // for impulse mode (index into presetValues)
+      duration: 0,        // capture duration in ms for current step
+      startTime: 0,
+      buffer: []
+    };
+    // Preset parameters
+    const impulsePWMs = [256, 384, 512, 640, 768, 896, 1023];
+    const impulseDuration = 2000; // 2 seconds per impulse step
+    const stepDuration = 5000;    // 5 seconds for step mode
+    const sineDuration = 15000;   // 15 seconds for sinusoidal mode
+
+    // ----- WebSocket Functions -----
+    function connectWebSocket() {
+      const ip = document.getElementById("ipInput").value;
+      socket = new WebSocket(ip);
+      
+      socket.onopen = () => {
+        document.getElementById("status").innerText = "Connected to " + ip;
+        log("[✓] WebSocket connection opened");
+      };
+      
+      socket.onmessage = (event) => {
+        // Expect telemetry as CSV: r,p,y,m1,m2,m3,m4 or small log messages.
+        log(event.data);
+        // Save the telemetry line globally
+        latestTelemetry = event.data;
+        // If capturing excitation data, also store this line.
+        if (excitationCapture.active) {
+          excitationCapture.buffer.push(event.data);
+        }
+      };
+      
+      socket.onclose = () => {
+        document.getElementById("status").innerText = "Disconnected";
+        log("[-] WebSocket connection closed");
+      };
+      
+      socket.onerror = (error) => {
+        log("[!] WebSocket error: " + error);
+      };
+    }
+
+    function sendCmd(cmd) {
+      if (socket && socket.readyState === WebSocket.OPEN) {
+        socket.send(cmd);
+        log("[->] " + cmd);
+      } else {
+        log("[!] Not connected");
+      }
+    }
+
+    function sendCustom() {
+      const cmd = document.getElementById("customCmd").value;
+      sendCmd(cmd);
+    }
+
+    function log(msg) {
+      logBuffer += msg + "\n";
+      const logBox = document.getElementById("log");
+      logBox.textContent += msg + "\n";
+      logBox.scrollTop = logBox.scrollHeight;
+    }
+
+    function downloadLogs() {
+      const blob = new Blob([logBuffer], { type: "text/plain" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = "quad_logs.txt";
+      a.click();
+      URL.revokeObjectURL(url);
+    }
+
+    // ----- Excitation Capture Functions -----
+    function startExcitation(mode) {
+      // Initialize local capture variables according to the mode.
+      excitationCapture.active = true;
+      excitationCapture.mode = mode;
+      excitationCapture.buffer = [];
+      excitationCapture.startTime = Date.now();
+      if (mode === "impulse") {
+        excitationCapture.currentIndex = 0;
+        excitationCapture.duration = impulseDuration;
+      } else if (mode === "step") {
+        excitationCapture.duration = stepDuration;
+      } else if (mode === "sine") {
+        excitationCapture.duration = sineDuration;
+      }
+      // Send the corresponding excitation command to ESP
+      sendCmd("E:" + mode);
+      // Start a timer to check capture progress.
+      checkExcitationCapture();
+    }
+
+    function checkExcitationCapture() {
+      if (!excitationCapture.active) return;
+      const now = Date.now();
+      if (now - excitationCapture.startTime >= excitationCapture.duration) {
+        // Capture period for current excitation step has ended.
+        // Prepare filename based on mode.
+        let filename = "";
+        if (excitationCapture.mode === "impulse") {
+          filename = "impulse_" + impulsePWMs[excitationCapture.currentIndex] + ".csv";
+        } else {
+          filename = excitationCapture.mode + ".csv";
+        }
+        // Build CSV content from buffer (each line already a CSV string).
+        const csvContent = excitationCapture.buffer.join("\n");
+        downloadCSV(csvContent, filename);
+        excitationCapture.buffer = []; // clear buffer
+        
+        if (excitationCapture.mode === "impulse") {
+          excitationCapture.currentIndex++;
+          if (excitationCapture.currentIndex < impulsePWMs.length) {
+            // For impulse, wait 1 second between PWM steps.
+            setTimeout(() => {
+              excitationCapture.startTime = Date.now();
+              checkExcitationCapture();
+            }, 1000);
+          } else {
+            // Done with impulse sequence.
+            excitationCapture.active = false;
+          }
+        } else {
+          // For step and sine, end capture.
+          excitationCapture.active = false;
+        }
+      } else {
+        // Continue checking capture progress.
+        setTimeout(checkExcitationCapture, 100);
+      }
+    }
+
+    // Utility function to trigger CSV file download.
+    function downloadCSV(content, filename) {
+      const blob = new Blob([content], { type: 'text/csv' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(url);
+      log("[CSV] Downloaded " + filename);
+    }
+
+    window.onload = function() {
+      connectWebSocket();
+    };
+  </script>
+</body>
+</html>

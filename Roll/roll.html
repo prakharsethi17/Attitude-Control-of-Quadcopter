@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>ESP32 Quad GUI</title>
+  <style>
+    body {
+      font-family: monospace;
+      background-color: #111;
+      color: #0f0;
+      padding: 20px;
+    }
+    #log {
+      white-space: pre-wrap;
+      border: 1px solid #0f0;
+      padding: 10px;
+      max-height: 300px;
+      overflow-y: auto;
+      background: #000;
+    }
+    input[type="text"] {
+      width: 300px;
+    }
+    button {
+      margin: 5px;
+      padding: 5px;
+    }
+  </style>
+</head>
+<body>
+  <h2>ESP32 Quad WebSocket Console</h2>
+
+  <div>
+    <label>ESP IP Address (ws://IP:81): </label>
+    <input type="text" id="ipInput" value="ws://192.168.234.83:81">
+    <button onclick="connectWebSocket()">Connect</button>
+    <span id="status">Not connected</span>
+  </div>
+
+  <div>
+    <button onclick="sendCmd('A')">ARM</button>
+    <button onclick="sendCmd('D')">DISARM</button>
+    <!-- Excitation Buttons -->
+    <button onclick="startExcitation('impulse')">Roll Impulse</button>
+    <button onclick="startExcitation('step')">Roll Step</button>
+    <button onclick="startExcitation('sine')">Roll Sine</button>
+    <button onclick="startExcitation('random')">Roll Random</button>
+    <button onclick="sendCmd('G:1,0,0,100,100,100,100')">Default PID</button>
+  </div>
+
+  <div>
+    <label>Custom Command:</label>
+    <input type="text" id="customCmd">
+    <button onclick="sendCustom()">Send</button>
+    <button onclick="downloadLogs()">Download Logs</button>
+  </div>
+
+  <h3>Logs:</h3>
+  <div id="log"></div>
+
+  <script>
+    let socket;
+    let logBuffer = "";
+    // CSV capture buffer for experiments
+    let csvBuffer = "";
+    let capturingCSV = false;
+
+    // ----------------------
+    // WebSocket Functions
+    // ----------------------
+    function connectWebSocket() {
+      const ip = document.getElementById("ipInput").value;
+      socket = new WebSocket(ip);
+      
+      socket.onopen = () => {
+        document.getElementById("status").innerText = "Connected to " + ip;
+        log("[✓] WebSocket connection opened");
+      };
+      
+      socket.onmessage = (event) => {
+        let message = event.data;
+        // Check for CSV markers
+        if (message.startsWith("START_CSV:")) {
+          capturingCSV = true;
+          csvBuffer = "";
+          log("[CSV] Capture started (" + message.substring(10) + ")");
+        } else if (message.startsWith("END_CSV:")) {
+          capturingCSV = false;
+          let filename = message.substring(8) + ".csv";
+          downloadCSV(csvBuffer, filename);
+          log("[CSV] Capture ended (" + filename + ")");
+        } else if (capturingCSV) {
+          // Append CSV line to buffer
+          csvBuffer += message + "\n";
+        } else {
+          log(message);
+        }
+      };
+      
+      socket.onclose = () => {
+        document.getElementById("status").innerText = "Disconnected";
+        log("[-] WebSocket connection closed");
+      };
+      
+      socket.onerror = (error) => {
+        log("[!] WebSocket error: " + error);
+      };
+    }
+
+    function sendCmd(cmd) {
+      if (socket && socket.readyState === WebSocket.OPEN) {
+        socket.send(cmd);
+        log("[->] " + cmd);
+      } else {
+        log("[!] Not connected");
+      }
+    }
+
+    function sendCustom() {
+      const cmd = document.getElementById("customCmd").value;
+      sendCmd(cmd);
+    }
+
+    function log(msg) {
+      logBuffer += msg + "\n";
+      const logBox = document.getElementById("log");
+      logBox.textContent += msg + "\n";
+      logBox.scrollTop = logBox.scrollHeight;
+    }
+
+    function downloadLogs() {
+      const blob = new Blob([logBuffer], { type: "text/plain" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = "quad_logs.txt";
+      a.click();
+      URL.revokeObjectURL(url);
+    }
+
+    // ----------------------
+    // CSV Download Utility
+    // ----------------------
+    function downloadCSV(content, filename) {
+      const blob = new Blob([content], { type: 'text/csv' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(url);
+      log("[CSV] Downloaded " + filename);
+    }
+
+    // ----------------------
+    // Excitation Control
+    // ----------------------
+    // When a user clicks one of the excitation buttons, send the command to ESP32.
+    // The ESP32 will run through the full experiment sequence automatically.
+    function startExcitation(mode) {
+      sendCmd("E:" + mode);
+    }
+
+    window.onload = function() {
+      connectWebSocket();
+    };
+  </script>
+</body>
+</html>

@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>ESP32 Quad WebSocket Console</title>
+  <!-- Include Chart.js for real-time plotting -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    body {
+      font-family: monospace;
+      background-color: #111;
+      color: #0f0;
+      padding: 20px;
+    }
+    #log {
+      white-space: pre-wrap;
+      border: 1px solid #0f0;
+      padding: 10px;
+      max-height: 300px;
+      overflow-y: auto;
+      background: #000;
+    }
+    input[type="text"] {
+      width: 300px;
+      margin: 5px;
+    }
+    button {
+      margin: 5px;
+      padding: 5px;
+    }
+    /* Style for chart canvas */
+    #chart {
+      border: 1px solid #0f0;
+      background: #000;
+      margin-top: 15px;
+    }
+  </style>
+</head>
+<body>
+  <h2>ESP32 Quad WebSocket Console</h2>
+
+  <div>
+    <label>ESP IP Address (ws://IP:81): </label>
+    <input type="text" id="ipInput" value="ws://192.168.78.83:81">
+    <button onclick="connectWebSocket()">Connect</button>
+    <span id="status">Not connected</span>
+  </div>
+
+  <div>
+    <button onclick="sendCmd('A')">ARM</button>
+    <button onclick="sendCmd('D')">DISARM</button>
+    <!-- Updated Default PID: inner loop gains as per ESP32 code -->
+    <button onclick="sendCmd('K:0.1,0.25,0.75')">Default PID</button>
+    <button onclick="resetPID()">Reset PID</button>
+  </div>
+
+  <div>
+    <label>Desired Roll Angle (deg): </label>
+    <input type="text" id="rollInput" placeholder="e.g., 10.0">
+    <button onclick="setDesiredRoll()">Set Desired Roll</button>
+  </div>
+
+  <div>
+    <label>Custom Command:</label>
+    <input type="text" id="customCmd">
+    <button onclick="sendCustom()">Send</button>
+    <button onclick="downloadLogs()">Download Logs</button>
+  </div>
+
+  <h3>Logs:</h3>
+  <div id="log"></div>
+
+  <!-- Chart for real-time plotting of roll angle and velocity -->
+  <canvas id="chart" width="800" height="300"></canvas>
+
+  <script>
+    let socket;
+    let logBuffer = "";
+
+    // ----------------------
+    // Real-Time Chart Setup (using Chart.js)
+    // ----------------------
+    let chart, chartLabels = [], chartRollData = [], chartVelocityData = [];
+    const MAX_POINTS = 100;
+
+    function initChart() {
+      const ctx = document.getElementById('chart').getContext('2d');
+      chart = new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels: chartLabels,
+          datasets: [
+            {
+              label: 'Roll (deg)',
+              data: chartRollData,
+              borderColor: 'lime',
+              fill: false,
+              tension: 0.1,
+              pointRadius: 2
+            },
+            {
+              label: 'Velocity (deg/s)',
+              data: chartVelocityData,
+              borderColor: 'red',
+              fill: false,
+              tension: 0.1,
+              pointRadius: 2
+            }
+          ]
+        },
+        options: {
+          responsive: false,
+          animation: false,
+          scales: {
+            x: {
+              display: false
+            },
+            y: {
+              min: -180,
+              max: 180,
+              ticks: {
+                stepSize: 10,
+                color: '#0f0'
+              }
+            }
+          },
+          plugins: {
+            legend: {
+              labels: {
+                color: '#0f0'
+              }
+            }
+          }
+        }
+      });
+    }
+
+    // Update the chart with both roll and velocity values.
+    function updateChart(roll, velocity) {
+      let timeLabel = new Date().toLocaleTimeString();
+      chartLabels.push(timeLabel);
+      chartRollData.push(roll);
+      chartVelocityData.push(velocity);
+      if (chartLabels.length > MAX_POINTS) {
+        chartLabels.shift();
+        chartRollData.shift();
+        chartVelocityData.shift();
+      }
+      chart.update();
+    }
+
+    // ----------------------
+    // WebSocket Functions
+    // ----------------------
+    function connectWebSocket() {
+      const ip = document.getElementById("ipInput").value;
+      socket = new WebSocket(ip);
+      
+      socket.onopen = () => {
+        document.getElementById("status").innerText = "Connected to " + ip;
+        log("[✓] WebSocket connection opened");
+      };
+      
+      socket.onmessage = (event) => {
+        let message = event.data;
+        log(message);
+
+        // If it contains T_ang: parse out A_ang and A_vel for charting
+        if (message.includes("T_ang:")) {
+          const telemetry = {};
+          const pairs = message.split(",");
+          pairs.forEach(pair => {
+            const [key, value] = pair.split(":");
+            // Try to store as float; if NaN, store raw string
+            const numericVal = parseFloat(value.trim());
+            telemetry[key.trim()] = isNaN(numericVal) ? value.trim() : numericVal;
+          });
+
+          // Chart: A_ang (actual roll) and A_vel (actual velocity)
+          const rollVal = telemetry["A_ang"];
+          const velVal = telemetry["A_vel"];
+          if (!isNaN(rollVal) && !isNaN(velVal)) {
+            updateChart(rollVal, velVal);
+          }
+        }
+      };
+
+      socket.onclose = () => {
+        document.getElementById("status").innerText = "Disconnected";
+        log("[-] WebSocket connection closed");
+      };
+
+      socket.onerror = (error) => {
+        log("[!] WebSocket error: " + error);
+      };
+    }
+
+    function sendCmd(cmd) {
+      if (socket && socket.readyState === WebSocket.OPEN) {
+        socket.send(cmd);
+        log("[->] " + cmd);
+      } else {
+        log("[!] Not connected");
+      }
+    }
+
+    function setDesiredRoll() {
+      let rollVal = document.getElementById("rollInput").value;
+      if (rollVal === "") {
+        log("[!] Enter a roll angle.");
+        return;
+      }
+      sendCmd("R:" + rollVal);
+    }
+
+    function sendCustom() {
+      const cmd = document.getElementById("customCmd").value;
+      sendCmd(cmd);
+    }
+    
+    function resetPID() {
+      sendCmd("reset");
+    }
+
+    function log(msg) {
+      logBuffer += msg + "\n";
+      const logBox = document.getElementById("log");
+      logBox.textContent += msg + "\n";
+      logBox.scrollTop = logBox.scrollHeight;
+    }
+
+    function downloadLogs() {
+      const blob = new Blob([logBuffer], { type: "text/plain" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = "quad_logs.txt";
+      a.click();
+      URL.revokeObjectURL(url);
+    }
+
+    window.onload = function() {
+      connectWebSocket();
+      initChart();
+    };
+  </script>
+</body>
+</html>

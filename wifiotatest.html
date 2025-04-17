@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>ESP32 WebSocket Test</title>
+  <style>
+    body { font-family: Arial; text-align: center; padding: 30px; }
+    #status { font-weight: bold; margin: 10px 0; }
+    button { padding: 10px 20px; margin: 5px; }
+    #info { margin-top: 20px; }
+  </style>
+</head>
+<body>
+
+  <h1>ESP32 WebSocket Interface</h1>
+
+  <div>
+    <input type="text" id="ip" placeholder="ESP32 IP (e.g. 192.168.1.42)" />
+    <button onclick="connectWS()">Connect</button>
+    <button onclick="disconnectWS()">Disconnect</button>
+  </div>
+
+  <div id="status">Status: <span style="color:red">Disconnected</span></div>
+
+  <div id="info">
+    <p>Latency: <span id="latency">-</span> ms</p>
+    <p>WiFi Connected Duration: <span id="uptime">-</span></p>
+  </div>
+
+  <script>
+    let socket;
+    let pingStartTime;
+    let pingInterval;
+    let uptimeStart = Date.now();
+
+    function connectWS() {
+      const ip = document.getElementById("ip").value.trim();
+      if (!ip) {
+        alert("Please enter ESP32 IP address.");
+        return;
+      }
+
+      socket = new WebSocket("ws://" + ip + ":81");
+
+      socket.onopen = () => {
+        document.getElementById("status").innerHTML = "Status: <span style='color:green'>Connected</span>";
+        pingInterval = setInterval(sendPing, 2000);
+        uptimeStart = Date.now(); // Reset timer on connect
+      };
+
+      socket.onmessage = (event) => {
+        if (event.data === "pong") {
+          const latency = Date.now() - pingStartTime;
+          document.getElementById("latency").textContent = latency;
+        }
+      };
+
+      socket.onclose = () => {
+        document.getElementById("status").innerHTML = "Status: <span style='color:red'>Disconnected</span>";
+        clearInterval(pingInterval);
+      };
+
+      socket.onerror = (error) => {
+        console.error("WebSocket error:", error);
+      };
+
+      updateUptimeDisplay();
+    }
+
+    function disconnectWS() {
+      if (socket) {
+        socket.close();
+        clearInterval(pingInterval);
+      }
+    }
+
+    function sendPing() {
+      if (socket && socket.readyState === WebSocket.OPEN) {
+        pingStartTime = Date.now();
+        socket.send("ping");
+      }
+    }
+
+    function updateUptimeDisplay() {
+      setInterval(() => {
+        const seconds = Math.floor((Date.now() - uptimeStart) / 1000);
+        const hrs = Math.floor(seconds / 3600);
+        const mins = Math.floor((seconds % 3600) / 60);
+        const secs = seconds % 60;
+        document.getElementById("uptime").textContent = `${hrs}h ${mins}m ${secs}s`;
+      }, 1000);
+    }
+  </script>
+
+</body>
+</html>
