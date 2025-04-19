@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>ESP32 Random Motor Experiment GUI</title>
+  <style>
+    body {
+      font-family: monospace;
+      background-color: #111;
+      color: #0f0;
+      padding: 20px;
+    }
+    #log, #telemetry {
+      white-space: pre-wrap;
+      border: 1px solid #0f0;
+      padding: 10px;
+      max-height: 300px;
+      overflow-y: auto;
+      background: #000;
+      margin-top: 10px;
+    }
+    input[type="text"] {
+      width: 300px;
+      margin-right: 5px;
+    }
+    button {
+      margin: 5px;
+      padding: 5px 10px;
+      background: #222;
+      color: #0f0;
+      border: 1px solid #0f0;
+      cursor: pointer;
+    }
+    button:hover {
+      background: #333;
+    }
+  </style>
+</head>
+<body>
+  <h2>ESP32 Random Motor Experiment</h2>
+
+  <div>
+    <label>ESP WebSocket URL:</label>
+    <input type="text" id="ipInput" value="ws://192.168.234.83:81">
+    <button onclick="connectWebSocket()">Connect</button>
+    <span id="status">Not connected</span>
+  </div>
+
+  <div>
+    <button onclick="sendCmd('A')">ARM & Start Experiment</button>
+    <button onclick="sendCmd('D')">DISARM & Stop</button>
+  </div>
+
+  <div>
+    <label>Custom Command:</label>
+    <input type="text" id="customCmd" placeholder="e.g. A or D">
+    <button onclick="sendCustom()">Send</button>
+    <button onclick="downloadLogs()">Download Logs</button>
+  </div>
+
+  <h3>Raw Logs:</h3>
+  <div id="log"></div>
+
+  <h3>Telemetry (last 5 samples):</h3>
+  <div id="telemetry"></div>
+
+  <script>
+    let socket;
+    let logBuffer = "";
+
+    function connectWebSocket() {
+      const url = document.getElementById('ipInput').value;
+      socket = new WebSocket(url);
+
+      socket.onopen = () => {
+        document.getElementById('status').innerText = 'Connected';
+        log('[✓] Connected to ' + url);
+      };
+
+      socket.onmessage = (event) => {
+        const msg = event.data;
+        // JSON telemetry messages start with '{'
+        if (msg.trim().startsWith('{')) {
+          try {
+            const data = JSON.parse(msg);
+            displayTelemetry(data);
+          } catch (e) {
+            log('[!] JSON parse error: ' + e);
+          }
+        } else {
+          log(msg);
+        }
+      };
+
+      socket.onclose = () => {
+        document.getElementById('status').innerText = 'Disconnected';
+        log('[-] Connection closed');
+      };
+
+      socket.onerror = (err) => {
+        log('[!] WebSocket error');
+      };
+    }
+
+    function sendCmd(cmd) {
+      if (socket && socket.readyState === WebSocket.OPEN) {
+        socket.send(cmd);
+        log('[->] ' + cmd);
+      } else {
+        log('[!] Not connected');
+      }
+    }
+
+    function sendCustom() {
+      const cmd = document.getElementById('customCmd').value;
+      sendCmd(cmd);
+    }
+
+    function log(msg) {
+      logBuffer += msg + '\n';
+      const box = document.getElementById('log');
+      box.textContent += msg + '\n';
+      box.scrollTop = box.scrollHeight;
+    }
+
+    function downloadLogs() {
+      const blob = new Blob([logBuffer], { type: 'text/plain' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'esp32_logs.txt';
+      a.click();
+      URL.revokeObjectURL(url);
+    }
+
+    function displayTelemetry(data) {
+      const keys = [
+        'roll', 'rollVel', 'pitch', 'pitchVel',
+        'yaw', 'yawVel', 'm1', 'm2', 'm3', 'm4',
+        'ctrlLoopTime', 'fullLoopTime'
+      ];
+      let html = '';
+      keys.forEach(k => {
+        if (data[k]) {
+          html += `<strong>${k}:</strong> ${JSON.stringify(data[k])}<br>`;
+        }
+      });
+      const el = document.getElementById('telemetry');
+      el.innerHTML = html;
+    }
+
+    window.onload = () => {
+      connectWebSocket();
+    };
+  </script>
+</body>
+</html>
